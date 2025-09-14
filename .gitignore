@@ -1,0 +1,20 @@
+# Ignore data folder
+data/
+
+# Ignore backend downloads folder
+backend/downloads/
+
+# Ignore virtual environments in backend and frontend
+backend/venv/
+frontend/venv/
+
+# Ignore Python cache files
+**/__pycache__/
+*.pyc
+
+# Optional: IDE/editor files
+.vscode/
+.idea/
+
+# Logs
+*.log
