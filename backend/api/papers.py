@@ -2,7 +2,7 @@ import requests
 import xml.etree.ElementTree as ET
 import subprocess , bibtexparser
 import json
-import sys , os
+import sys , os , time
 
 
 class PapersFetcher:
@@ -14,7 +14,7 @@ class PapersFetcher:
     # Normalized paper template
     # -----------------------------
     @staticmethod
-    def normalize_paper(paper_id, title, authors, venue, year, doi, pdf_url, pdf_status, source, abstract="", abstract_hit=False):
+    def normalize_paper(paper_id, title, authors, venue, year, doi, pdf_url, pdf_status, source, abstract="", abstract_hit=False , last_updated=""):
         # Convert authors to string if it's a list
         if isinstance(authors, list):
             authors_str = ", ".join(authors)
@@ -34,10 +34,11 @@ class PapersFetcher:
             "primary_keywords": [],
             "pdf_status": pdf_status,
             "pdf_url": pdf_url,
+            "pdf_path": '',
             "secondary_keywords_present": {},
             "secondary_keyword_counts": {},
             "paper_type": "Other",
-            "last_updated": None
+            "last_updated": last_updated
         }
 
     # -----------------------------
@@ -64,7 +65,9 @@ class PapersFetcher:
 
             # Extract authors as comma-separated string
             authors = ", ".join([a.find('arxiv:name', ns).text for a in entry.findall('arxiv:author', ns)])
-
+             # Last updated
+            last_updated_elem = entry.find('arxiv:updated', ns)
+            last_updated = last_updated_elem.text if last_updated_elem is not None else None
             # Append normalized paper
             papers.append(self.normalize_paper(
                 paper_id=paper_id,
@@ -77,7 +80,8 @@ class PapersFetcher:
                 pdf_status=pdf_status,
                 source="arXiv",
                 abstract=entry.find('arxiv:summary', ns).text,
-                abstract_hit=query.lower() in (entry.find('arxiv:summary', ns).text.lower())
+                abstract_hit=query.lower() in (entry.find('arxiv:summary', ns).text.lower()),
+                last_updated=last_updated
             ))
 
         return papers
@@ -104,7 +108,7 @@ class PapersFetcher:
             data = response.json()
             batch = data.get("data", [])
             for paper in batch:
-                print(paper)
+                print('abcpaper',paper)
                 open_access = paper.get("openAccessPdf", {})
                 pdf_url = open_access.get("url") if open_access and open_access.get("url") else None
                 pdf_status = "downloaded" if pdf_url else "unavailable"
@@ -119,7 +123,8 @@ class PapersFetcher:
                     pdf_status = pdf_status,
                     source="Semantic Scholar",
                     abstract=paper.get("abstract"),
-                    abstract_hit=query.lower() in (paper.get("abstract") or "").lower()
+                    abstract_hit=query.lower() in (paper.get("abstract") or "").lower(),
+                    last_updated=paper.get("year")
                 ))
 
             token = data.get("token")
@@ -178,7 +183,19 @@ class PapersFetcher:
                 for a in item["author"]:
                     full_name = " ".join(filter(None, [a.get("given"), a.get("family")]))
                     authors.append(full_name)
-
+            
+            # Extract PDF URL from 'link' field if available
+            pdf_url = ""
+            if "link" in item:
+                for link in item["link"]:
+                    if link.get("content-type") == "application/pdf":
+                        pdf_url = link.get("URL")
+                        break  # take first PDF link
+             # Extract year
+            last_updated = None
+            if "issued" in item and "date-parts" in item["issued"]:
+                year = item["issued"]["date-parts"][0]
+                last_updated = "-".join(str(x) for x in year)
             return self.normalize_paper(
                 paper_id=item.get("DOI"),
                 title=item.get("title", [None])[0],
@@ -186,9 +203,12 @@ class PapersFetcher:
                 venue=item.get("container-title", [None])[0],
                 year=item.get("issued", {}).get("date-parts", [[None]])[0][0],
                 doi=item.get("DOI"),
-                source="ACM (CrossRef member search + DOI enrichment)",
+                pdf_url = pdf_url,
+                pdf_status = '',
+                source="Google Scholar",
                 abstract=item.get("abstract") or "",
-                abstract_hit=query.lower() in (item.get("title", [""])[0].lower())
+                abstract_hit=query.lower() in (item.get("title", [""])[0].lower()),
+                last_updated=last_updated
             )
         except Exception as e:
             print(f"CrossRef enrichment failed for DOI {doi}: {e}")
@@ -205,7 +225,7 @@ class PapersFetcher:
             items = response.json()["message"]["items"]
 
             for item in items:  # items is the Crossref API response list
-                print("item", item)
+                print("itemabc", item)
 
                 # Extract title safely
                 title = item.get("title", [""])[0]
@@ -215,9 +235,10 @@ class PapersFetcher:
                                     for a in item.get("author", [])])
 
                 # Extract year
-                year = None
+                last_updated = None
                 if "issued" in item and "date-parts" in item["issued"]:
-                    year = item["issued"]["date-parts"][0][0]
+                    year = item["issued"]["date-parts"][0]
+                    last_updated = "-".join(str(x) for x in year)
 
                 # Extract DOI
                 doi = item.get("DOI")
@@ -244,7 +265,8 @@ class PapersFetcher:
                     pdf_status=pdf_status,
                     source="ACM Digital Library",
                     abstract=None,  # Crossref doesn’t provide abstract
-                    abstract_hit=query.lower() in title.lower()
+                    abstract_hit=query.lower() in title.lower(),
+                    last_updated=last_updated
                 ))
 
         except Exception as e:
@@ -252,15 +274,13 @@ class PapersFetcher:
 
         return papers
 
-    # -----------------------------
-    # Google Scholar via PyPaperBot subprocess
-    # -----------------------------
-    def fetch_google_scholar(self, query: str, scholar_pages: int = 1, max_results: int = 10):
+    def fetch_google_scholar(self, query: str, scholar_pages: int = 1, max_results: int = 10, timeout: int = 120):
         """
         Fetch papers from Google Scholar using PyPaperBot subprocess.
-        Returns a list of normalized paper dicts.
+        Downloads PDFs, reads results.csv, enriches metadata via DOI, 
+        and normalizes papers with PDF paths.
         """
-        import time
+        import csv
         papers = []
 
         try:
@@ -274,8 +294,8 @@ class PapersFetcher:
                 f"--query={query.strip()}",
                 f"--scholar-pages={scholar_pages}",
                 f"--scholar-results={max_results}",
-                "--restrict=0",               
-                f"--dwn-dir={dwn_dir}"         
+                "--restrict=0",
+                f"--dwn-dir={dwn_dir}"
             ]
             print("Running PyPaperBot...")
             result = subprocess.run(cmd, capture_output=True, text=True)
@@ -284,42 +304,78 @@ class PapersFetcher:
                 print("PyPaperBot error:\n", result.stderr)
                 return []
 
-            # Wait for BibTeX files to be created
-            timeout = 30  # seconds
+            # Wait for results.csv
+            csv_file = os.path.join(dwn_dir, "result.csv")
             start_time = time.time()
-            bib_files = []
             while time.time() - start_time < timeout:
-                bib_files = [f for f in os.listdir(dwn_dir) if f.endswith(".bib")]
-                if bib_files:
+                if os.path.exists(csv_file) and os.path.getsize(csv_file) > 0:
                     break
-                time.sleep(1)  # wait 1 sec and retry
-
-            if not bib_files:
-                print("No BibTeX files found in downloads directory.")
+                time.sleep(1)
+            else:
+                print("results.csv not found or empty.")
                 return []
+            print('before csv open')
+            # Parse CSV and normalize papers
+            with open(csv_file, newline="", encoding="utf-8") as csvfile:
+                reader = csv.DictReader(csvfile)
+                for row in reader:
+                    doi = row.get("doi") or row.get("DOI")
+                    print('doi',doi)
+                    # pdf_path = row.get("pdf_path") or row.get("PDF Path") or ""
+                    paper = None
 
-            # Parse all BibTeX files
-            for bib_file in bib_files:
-                bib_path = os.path.join(dwn_dir, bib_file)
-                with open(bib_path, "r", encoding="utf-8") as f:
-                    bib_db = bibtexparser.load(f)
-                    for entry in bib_db.entries:
-                        papers.append(self.normalize_paper(
-                            paper_id=entry.get("doi") or entry.get("ID"),
-                            title=entry.get("title"),
-                            authors=[a.strip() for a in entry.get("author", "").split(" and ")],
-                            venue=entry.get("journal") or entry.get("booktitle") or "Google Scholar",
-                            year=entry.get("year"),
-                            doi=entry.get("doi"),
-                            pdf_url='',
-                            pdf_status='',
-                            source="Google Scholar (PyPaperBot)",
-                            abstract=entry.get("abstract", ""),
-                            abstract_hit=query.lower() in (entry.get("abstract") or "").lower()
-                        ))
+                    # Enrich metadata via DOI
+                    if doi:
+                        enriched = self.enrich_acm_with_doi(doi, query)
+                        print(enriched)
+                        if enriched:
+                            paper = enriched
+
+                    # Fallback to CSV data if enrichment fails
+                    if not paper:
+                        paper = self.normalize_paper(
+                            paper_id=doi or row.get("ID"),
+                            title=row.get("title"),
+                            authors=[a.strip() for a in row.get("author", "").split(";")],
+                            venue=row.get("journal") or "Google Scholar",
+                            year=row.get("year"),
+                            doi=doi,
+                            pdf_url=row.get("pdf_url") or "",
+                            pdf_status="",
+                            source="Google Scholar (CSV)",
+                            abstract=row.get("abstract") or "",
+                            abstract_hit=query.lower() in (row.get("abstract") or "").lower(),
+                            last_updated=row.get("year")
+                        )
+
+                    papers.append(paper)
 
         except Exception as e:
             print(f"Google Scholar fetch error: {e}")
 
         print(f"Total papers fetched: {len(papers)}")
         return papers
+
+class PaperProcessor:
+
+    def deduplicate(self, all_papers):
+        """
+        Deduplicate papers across multiple sources using DOI or (title + first author).
+        """
+        seen_keys = set()
+        unique_papers = []
+        duplicates = []
+
+        for paper in all_papers:
+            key = paper.get("doi") or (
+                paper.get("title", "").lower(),
+                paper.get("authors")[0] if paper.get("authors") else "",
+            )
+            if key not in seen_keys:
+                seen_keys.add(key)
+                unique_papers.append(paper)
+            else:
+                duplicates.append(paper)
+
+        return unique_papers
+
