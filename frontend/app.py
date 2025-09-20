@@ -37,8 +37,6 @@ if st.button("Fetch Papers"):
     else:
         with st.spinner(f"Fetching papers from {', '.join(sources_selected)} via API..."):
             try:
-                # Map the source names to API parameter
-                # api_source_map = {"arXiv": "arxiv", "Semantic Scholar": "semantic"}
                 selected_sources_api = ",".join([api_source_map[s] for s in sources_selected])
 
                 # Call FastAPI endpoint
@@ -59,16 +57,13 @@ if st.button("Fetch Papers"):
                     #     papers_list = papers_list[:max_results]
                   
                     if papers_list:
-                        print(papers_list)
                         df = pd.DataFrame(papers_list)
                         st.success(f"✅ Showing {len(df)} papers (limited by Max Results).")
                         st.dataframe(df)
 
-                        # Ensure data folder exists
                         if not os.path.exists("../data"):
                             os.makedirs("../data")
 
-                        # Save CSV
                         df.to_csv("../data/master.csv", index=False)
                         st.info("Results saved to data/master.csv")
                     else:

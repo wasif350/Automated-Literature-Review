@@ -1,8 +1,8 @@
 import requests
 import xml.etree.ElementTree as ET
-import subprocess , bibtexparser
+import subprocess, bibtexparser
 import json
-import sys , os , time
+import sys, os, time
 
 
 class PapersFetcher:
@@ -15,7 +15,12 @@ class PapersFetcher:
     # -----------------------------
     @staticmethod
     def normalize_paper(paper_id, title, authors, venue, year, doi, pdf_url, pdf_status, source, abstract="", abstract_hit=False , last_updated=""):
-        # Convert authors to string if it's a list
+        """
+        Normalize paper metadata into a consistent dictionary format.
+        Ensures uniform fields (ID, title, authors, venue, year, DOI, abstract, PDF info, etc.)
+        across different data sources.
+        """
+
         if isinstance(authors, list):
             authors_str = ", ".join(authors)
         else:
@@ -45,6 +50,12 @@ class PapersFetcher:
     # arXiv
     # -----------------------------
     def fetch_arxiv(self, query, max_results=5):
+        """
+        Fetch papers from arXiv using its API.
+        Parses XML feed, extracts metadata (title, authors, summary, dates, DOI, PDF link),
+        and normalizes results into a standard paper format.
+        """
+
         base_url = "http://export.arxiv.org/api/query"
         params = {"search_query": query, "start": 0, "max_results": max_results}
         response = requests.get(base_url, params=params)
@@ -52,36 +63,53 @@ class PapersFetcher:
             return []
 
         root = ET.fromstring(response.text)
-        ns = {'arxiv': 'http://www.w3.org/2005/Atom'}
+        ns = {
+            "atom": "http://www.w3.org/2005/Atom",
+            "arxiv": "http://arxiv.org/schemas/atom"
+        }
         papers = []
-       
-        for entry in root.findall('arxiv:entry', ns):
-            # Extract paper_id safely
-            paper_id = entry.find('arxiv:id', ns).text if entry.find('arxiv:id', ns) is not None else None
 
-            # Build PDF URL only if paper_id exists
-            pdf_url = f"{paper_id}.pdf" if paper_id else None
+        for entry in root.findall("atom:entry", ns):
+            paper_id = entry.find("atom:id", ns).text if entry.find("atom:id", ns) is not None else None
+            title = entry.find("atom:title", ns).text.strip() if entry.find("atom:title", ns) is not None else None
+            summary = entry.find("atom:summary", ns).text.strip() if entry.find("atom:summary", ns) is not None else None
+            published = entry.find("atom:published", ns).text if entry.find("atom:published", ns) is not None else None
+            updated = entry.find("atom:updated", ns).text if entry.find("atom:updated", ns) is not None else None
+
+            authors = ", ".join(
+                [a.find("atom:name", ns).text for a in entry.findall("atom:author", ns)]
+            )
+
+            doi_elem = entry.find("arxiv:doi", ns)
+            if doi_elem is not None:
+                doi = doi_elem.text
+            elif paper_id:
+                base_arxiv_id = paper_id.split("/")[-1].split("v")[0]
+                doi = f"10.48550/arXiv.{base_arxiv_id}"
+            else:
+                doi = None
+
+            pdf_url = None
+            for link in entry.findall("atom:link", ns):
+                if link.attrib.get("type") == "application/pdf":
+                    pdf_url = link.attrib.get("href")
+                    break
+
             pdf_status = "downloaded" if pdf_url else "unavailable"
 
-            # Extract authors as comma-separated string
-            authors = ", ".join([a.find('arxiv:name', ns).text for a in entry.findall('arxiv:author', ns)])
-             # Last updated
-            last_updated_elem = entry.find('arxiv:updated', ns)
-            last_updated = last_updated_elem.text if last_updated_elem is not None else None
-            # Append normalized paper
             papers.append(self.normalize_paper(
                 paper_id=paper_id,
-                title=entry.find('arxiv:title', ns).text,
+                title=title,
                 authors=authors,
                 venue="arXiv",
-                year=entry.find('arxiv:published', ns).text[:4],
-                doi=entry.find('arxiv:doi', ns).text if entry.find('arxiv:doi', ns) is not None else None,
+                year=published[:4] if published else None,
+                doi=doi,
                 pdf_url=pdf_url,
                 pdf_status=pdf_status,
                 source="arXiv",
-                abstract=entry.find('arxiv:summary', ns).text,
-                abstract_hit=query.lower() in (entry.find('arxiv:summary', ns).text.lower()),
-                last_updated=last_updated
+                abstract=summary,
+                abstract_hit=query.lower() in summary.lower() if summary else False,
+                last_updated=updated
             ))
 
         return papers
@@ -90,6 +118,12 @@ class PapersFetcher:
     # Semantic Scholar
     # -----------------------------
     def fetch_semantic_scholar(self, query, max_results=100, year="2023-"):
+        """
+        Fetch papers from Semantic Scholar API.
+        Retrieves metadata (title, authors, venue, year, abstract, PDF info) 
+        and normalizes results into a standard format.
+        """
+        
         url = "https://api.semanticscholar.org/graph/v1/paper/search/bulk"
         headers = {"x-api-key": self.semantic_api_key}
         fields = "title,url,authors,abstract,year,venue,openAccessPdf,publicationTypes"
@@ -108,7 +142,6 @@ class PapersFetcher:
             data = response.json()
             batch = data.get("data", [])
             for paper in batch:
-                print('abcpaper',paper)
                 open_access = paper.get("openAccessPdf", {})
                 pdf_url = open_access.get("url") if open_access and open_access.get("url") else None
                 pdf_status = "downloaded" if pdf_url else "unavailable"
@@ -137,6 +170,12 @@ class PapersFetcher:
     # IEEE
     # -----------------------------
     def fetch_ieee(self, query, max_results=5):
+        """
+        Fetch papers from IEEE Xplore API.
+        Extracts metadata (title, authors, venue, year, DOI, abstract, PDF info) 
+        and normalizes results into a standard format.
+        """
+
         url = "https://ieeexploreapi.ieee.org/api/v1/search/articles"
         params = {
             "apikey": self.ieee_api_key,
@@ -172,6 +211,12 @@ class PapersFetcher:
     # ACM via CrossRef member ID
     # -----------------------------
     def enrich_acm_with_doi(self, doi, query):
+        """
+        Enrich ACM papers via CrossRef using DOI.
+        Retrieves metadata (title, authors, venue, year, abstract, PDF link) 
+        and normalizes it into a standard format.
+        """
+
         url = f"https://api.crossref.org/works/{doi}"
         try:
             resp = requests.get(url)
@@ -184,14 +229,13 @@ class PapersFetcher:
                     full_name = " ".join(filter(None, [a.get("given"), a.get("family")]))
                     authors.append(full_name)
             
-            # Extract PDF URL from 'link' field if available
             pdf_url = ""
             if "link" in item:
                 for link in item["link"]:
                     if link.get("content-type") == "application/pdf":
                         pdf_url = link.get("URL")
-                        break  # take first PDF link
-             # Extract year
+                        break
+
             last_updated = None
             if "issued" in item and "date-parts" in item["issued"]:
                 year = item["issued"]["date-parts"][0]
@@ -215,8 +259,14 @@ class PapersFetcher:
             return None
 
     def fetch_acm_by_member(self, query, max_results=20):
+        """
+        Fetch papers from ACM Digital Library via CrossRef member ID.
+        Extracts metadata (title, authors, venue, year, DOI, PDF link) 
+        and normalizes results into a standard format.
+        """
+
         url = "https://api.crossref.org/works"
-        params = {"query": query, "rows": max_results, "filter": "member:320"}  # ACM member
+        params = {"query": query, "rows": max_results, "filter": "member:320"}
 
         papers = []
         try:
@@ -224,36 +274,28 @@ class PapersFetcher:
             response.raise_for_status()
             items = response.json()["message"]["items"]
 
-            for item in items:  # items is the Crossref API response list
-                print("itemabc", item)
+            for item in items:
 
-                # Extract title safely
                 title = item.get("title", [""])[0]
-
-                # Extract authors as a single string
                 authors = ", ".join([f"{a.get('given', '')} {a.get('family', '')}".strip() 
                                     for a in item.get("author", [])])
 
-                # Extract year
                 last_updated = None
                 if "issued" in item and "date-parts" in item["issued"]:
                     year = item["issued"]["date-parts"][0]
                     last_updated = "-".join(str(x) for x in year)
 
-                # Extract DOI
                 doi = item.get("DOI")
 
-                # Extract PDF URL (if any)
                 pdf_url = None
                 if "link" in item:
                     for link in item["link"]:
-                        if "pdf" in link.get("URL", ""):  # look for ACM pdf link
+                        if "pdf" in link.get("URL", ""):
                             pdf_url = link["URL"]
                             break
 
                 pdf_status = "downloaded" if pdf_url else "unavailable"
 
-                # Append normalized result
                 papers.append(self.normalize_paper(
                     paper_id=doi,
                     title=title,
@@ -264,7 +306,7 @@ class PapersFetcher:
                     pdf_url=pdf_url,
                     pdf_status=pdf_status,
                     source="ACM Digital Library",
-                    abstract=None,  # Crossref doesn’t provide abstract
+                    abstract=None,
                     abstract_hit=query.lower() in title.lower(),
                     last_updated=last_updated
                 ))
@@ -274,6 +316,9 @@ class PapersFetcher:
 
         return papers
 
+    # -----------------------------
+    # Google Scholar
+    # -----------------------------
     def fetch_google_scholar(self, query: str, scholar_pages: int = 1, max_results: int = 10, timeout: int = 120):
         """
         Fetch papers from Google Scholar using PyPaperBot subprocess.
@@ -284,11 +329,9 @@ class PapersFetcher:
         papers = []
 
         try:
-            # Ensure downloads directory exists
             dwn_dir = os.path.abspath("./downloads")
             os.makedirs(dwn_dir, exist_ok=True)
 
-            # Run PyPaperBot subprocess
             cmd = [
                 sys.executable, "-m", "PyPaperBot",
                 f"--query={query.strip()}",
@@ -297,14 +340,11 @@ class PapersFetcher:
                 "--restrict=0",
                 f"--dwn-dir={dwn_dir}"
             ]
-            print("Running PyPaperBot...")
+
             result = subprocess.run(cmd, capture_output=True, text=True)
-            print("PyPaperBot output:\n", result.stdout)
             if result.returncode != 0:
-                print("PyPaperBot error:\n", result.stderr)
                 return []
 
-            # Wait for results.csv
             csv_file = os.path.join(dwn_dir, "result.csv")
             start_time = time.time()
             while time.time() - start_time < timeout:
@@ -314,24 +354,19 @@ class PapersFetcher:
             else:
                 print("results.csv not found or empty.")
                 return []
-            print('before csv open')
-            # Parse CSV and normalize papers
+
             with open(csv_file, newline="", encoding="utf-8") as csvfile:
                 reader = csv.DictReader(csvfile)
                 for row in reader:
                     doi = row.get("doi") or row.get("DOI")
-                    print('doi',doi)
                     # pdf_path = row.get("pdf_path") or row.get("PDF Path") or ""
                     paper = None
 
-                    # Enrich metadata via DOI
                     if doi:
                         enriched = self.enrich_acm_with_doi(doi, query)
-                        print(enriched)
                         if enriched:
                             paper = enriched
 
-                    # Fallback to CSV data if enrichment fails
                     if not paper:
                         paper = self.normalize_paper(
                             paper_id=doi or row.get("ID"),
@@ -353,7 +388,6 @@ class PapersFetcher:
         except Exception as e:
             print(f"Google Scholar fetch error: {e}")
 
-        print(f"Total papers fetched: {len(papers)}")
         return papers
 
 class PaperProcessor:

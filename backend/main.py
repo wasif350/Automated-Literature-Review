@@ -1,17 +1,20 @@
 from fastapi import FastAPI, Query
-from api.papers import PapersFetcher , PaperProcessor
-from utils.pdf_utils import PDFHandler , PDFScanner , PdfProcessor
+from api.papers import PapersFetcher, PaperProcessor
+from utils.pdf_utils import PDFHandler, PDFScanner, PdfProcessor
+from config import Config
+from logs.logging_config import logger
 
 app = FastAPI(title="Literature Review API")
 
 fetcher = PapersFetcher(
-    semantic_api_key="wD0HXTHe8g8siv01xtVyd76yTeqpgoV75KBzGKv5",
-    ieee_api_key="nw5ez8vktv2dtxrxud6xy6av"
+    semantic_api_key=Config.SEMANTIC_API_KEY,
+    ieee_api_key=Config.IEEE_API_KEY
 )
 processor = PaperProcessor()
 
 pdf_handler = PDFHandler(download_dir="./downloads")
 pdf_processer = PdfProcessor(download_dir="./downloads")
+
 ALLOWED_FIELDS = {
     "paper_id",
     "title",
@@ -30,69 +33,54 @@ ALLOWED_FIELDS = {
     "last_updated",
 }
 
-
-def deduplicate_papers(all_papers):
-    """
-    Deduplicate papers across multiple sources using DOI or (title + first author).
-    """
-    seen_keys = set()
-    unique_papers = []
-    duplicates = []
-
-    for paper in all_papers:
-        key = paper.get("doi") or (paper.get("title", "").lower(), 
-                                   paper.get("authors")[0] if paper.get("authors") else "")
-        if key not in seen_keys:
-            seen_keys.add(key)
-            unique_papers.append(paper)
-        else:
-            duplicates.append(paper)
-
-    print(f"Total papers before deduplication: {len(all_papers)}")
-    print(f"Total papers after deduplication: {len(unique_papers)}")
-    print(f"Duplicate papers skipped: {len(duplicates)}")
-
-    return unique_papers
-
-def process_papers(papers , query):
-     # Build secondary keyword list from query
-    raw_keywords = query.replace("AND", " ").replace("and", " ").split()
-    secondary_keywords = [kw.strip() for kw in raw_keywords if kw.strip()]
-    pdf_scanner = PDFScanner(secondary_keywords=secondary_keywords)
-    # Step 1: Download PDFs
-    papers = pdf_handler.batch_download(papers)
-
-    # Step 2: Scan PDFs for secondary keywords
-    for i, paper in enumerate(papers):
-        print(paper)
-        if paper.get("pdf_status") == "downloaded":
-            scan_results = pdf_scanner.scan_pdf(paper["pdf_path"])
-            print(scan_results)
-            papers[i].update(scan_results)
-
-    return papers
-
 def sanitize_paper(paper: dict) -> dict:
     """Keep only allowed fields in each paper row."""
     return {k: v for k, v in paper.items() if k in ALLOWED_FIELDS}
 
+
+@app.on_event("startup")
+async def startup_event():
+    logger.info("🚀 FastAPI app started")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    logger.info("🛑 FastAPI app shutting down")
+
+
 @app.get("/papers")
 def get_papers(query: str, max_results: int = 5, sources: str = Query("arxiv,semantic,ieee,acm")):
-    results = []
-    selected_sources = [s.strip().lower() for s in sources.split(",")]
+    """
+    API endpoint to fetch research papers from multiple sources 
+    (arXiv, Semantic Scholar, IEEE, ACM, Google Scholar).
+    Applies deduplication, PDF processing, and sanitization before returning results.
+    """
+    logger.info(f"Fetching papers | query='{query}', max_results={max_results}, sources={sources}")
 
-    if "arxiv" in selected_sources:
-        results.extend(fetcher.fetch_arxiv(query, max_results))
-    if "semantic" in selected_sources:
-        results.extend(fetcher.fetch_semantic_scholar(query, max_results))
-    if "ieee" in selected_sources:
-        results.extend(fetcher.fetch_ieee(query, max_results))
-    if "acm" in selected_sources:
-        results.extend(fetcher.fetch_acm_by_member(query, max_results))
-    if "google" in selected_sources:
-        results.extend(fetcher.fetch_google_scholar(query, scholar_pages=1, max_results=max_results))
-    results = processor.deduplicate(results)
-    results = pdf_processer.process(results , query)
-    results = [sanitize_paper(p) for p in results]
-    
-    return {"results": results}
+    results = []
+    try:
+        selected_sources = [s.strip().lower() for s in sources.split(",")]
+
+        if "arxiv" in selected_sources:
+            results.extend(fetcher.fetch_arxiv(query, max_results))
+        if "semantic" in selected_sources:
+            results.extend(fetcher.fetch_semantic_scholar(query, max_results))
+        if "ieee" in selected_sources:
+            results.extend(fetcher.fetch_ieee(query, max_results))
+        if "acm" in selected_sources:
+            results.extend(fetcher.fetch_acm_by_member(query, max_results))
+        if "google" in selected_sources:
+            results.extend(fetcher.fetch_google_scholar(query, scholar_pages=1, max_results=max_results))
+
+        logger.info(f"Fetched {len(results)} raw papers")
+
+        results = processor.deduplicate(results)
+        results = pdf_processer.process(results, query)
+        results = [sanitize_paper(p) for p in results]
+
+        logger.info(f"Returning {len(results)} papers after processing")
+        return {"results": results}
+
+    except Exception as e:
+        logger.exception(f"Error fetching papers: {e}")
+        return {"error": "Something went wrong"}

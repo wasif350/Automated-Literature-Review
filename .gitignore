@@ -1,8 +1,17 @@
+# Ignore everything inside logs/
+logs/*
+
+# But keep logging_config.py
+!logs/logging_config.py
+
 # Ignore data folder
 data/
 
 # Ignore backend downloads folder
 backend/downloads/
+
+# Ignore backend .env file
+backend/.env/
 
 # Ignore virtual environments in backend and frontend
 backend/venv/
@@ -16,5 +25,5 @@ frontend/venv/
 .vscode/
 .idea/
 
-# Logs
+# Ignore log files
 *.log
