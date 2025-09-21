@@ -27,6 +27,7 @@ ALLOWED_FIELDS = {
     "abstract_hit",
     "primary_keywords",
     "pdf_status",
+    "pdf_url",
     "secondary_keywords_present",
     "secondary_keyword_counts",
     "paper_type",
@@ -77,6 +78,7 @@ def get_papers(query: str, max_results: int = 5, sources: str = Query("arxiv,sem
         results = processor.deduplicate(results)
         results = pdf_processer.process(results, query)
         results = [sanitize_paper(p) for p in results]
+        results.sort(key=lambda p: int(p.get('year', 0)), reverse=True)
 
         logger.info(f"Returning {len(results)} papers after processing")
         return {"results": results}

@@ -35,7 +35,7 @@ class PapersFetcher:
     # -----------------------------
     # Normalized paper template
     # -----------------------------
-    def normalize_paper(self,paper_id, title, authors, venue, year, doi, pdf_url, pdf_status, source, abstract="", abstract_hit=False , last_updated=""):
+    def normalize_paper(self,paper_id, title, authors, venue, year, doi, pdf_url, pdf_status, source, abstract="", abstract_hit=False, paper_type="Other", last_updated=""):
         """
         Normalize paper metadata into a consistent dictionary format.
         Ensures uniform fields (ID, title, authors, venue, year, DOI, abstract, PDF info, etc.)
@@ -63,7 +63,7 @@ class PapersFetcher:
             "pdf_path": '',
             "secondary_keywords_present": {},
             "secondary_keyword_counts": {},
-            "paper_type": "Other",
+            "paper_type": paper_type,
             "last_updated": last_updated
         }
 
@@ -119,9 +119,11 @@ class PapersFetcher:
                 if link.attrib.get("type") == "application/pdf":
                     pdf_url = link.attrib.get("href")
                     break
-
             pdf_status = "downloaded" if pdf_url else "unavailable"
 
+            primary_cat = entry.find("arxiv:primary_category", ns)
+            paper_type = primary_cat.attrib.get("term") if primary_cat is not None else "Unknown"
+ 
             papers.append(self.normalize_paper(
                 paper_id=paper_id,
                 title=title,
@@ -134,6 +136,7 @@ class PapersFetcher:
                 source="arXiv",
                 abstract=summary,
                 abstract_hit=query.lower() in summary.lower() if summary else False,
+                paper_type=paper_type,
                 last_updated=updated
             ))
 
@@ -166,7 +169,7 @@ class PapersFetcher:
 
             data = response.json()
             batch = data.get("data", [])
-            for paper in batch:
+            for paper in batch: 
                 open_access = paper.get("openAccessPdf", {})
 
                 pdf_url = open_access.get("url") if open_access and open_access.get("url") else None
@@ -174,6 +177,8 @@ class PapersFetcher:
                     doi = pdf_url.replace("https://doi.org/", "")
                 pdf_status = "downloaded" if pdf_url else "unavailable"
 
+                publication_types = paper.get("publicationTypes", [])
+                paper_type = ", ".join(publication_types) if publication_types else None
                 papers.append(self.normalize_paper(
                     paper_id=paper.get("paperId"),
                     title=paper.get("title"),
@@ -186,12 +191,74 @@ class PapersFetcher:
                     source="Semantic Scholar",
                     abstract=paper.get("abstract"),
                     abstract_hit=query.lower() in (paper.get("abstract") or "").lower(),
+                    paper_type=paper_type,
                     last_updated=paper.get("year")
                 ))
 
             token = data.get("token")
             if not token:
                 break
+         
+        return papers
+        
+    def fetch_ieee_by_member(self, query, max_results=5):
+        """
+        Fallback: Fetch IEEE papers via CrossRef member:263
+        """
+        url = "https://api.crossref.org/works"
+        params = {"query": query, "rows": max_results, "filter": "member:263"}
+
+        papers = []
+        try:
+            response = requests.get(url, params=params)
+            response.raise_for_status()
+            items = response.json()["message"]["items"]
+
+            for item in items:
+                doi = item.get("DOI")
+                title = item.get("title", [""])[0]
+                authors = ", ".join([
+                    f"{a.get('given', '')} {a.get('family', '')}".strip()
+                    for a in item.get("author", [])
+                ])
+                year = item.get("issued", {}).get("date-parts", [[None]])[0][0]
+                
+                pdf_url = None
+                pdf_status = "unavailable"
+
+                if "link" in item:
+                    for link in item["link"]:
+                        url = link.get("URL", "")
+                        if url and url.endswith(".pdf") and "xplorestaging" not in url:
+                            pdf_url = url
+                            pdf_status = "downloaded"
+                            break
+
+                if not pdf_url:
+                    if "resource" in item and "primary" in item["resource"]:
+                        pdf_url = item["resource"]["primary"].get("URL")
+                    elif item.get("URL"):
+                        pdf_url = item.get("URL")
+
+
+                papers.append(self.normalize_paper(
+                    paper_id=doi,
+                    title=title,
+                    authors=authors,
+                    venue=item.get("container-title", ["IEEE"])[0],
+                    year=year,
+                    doi=doi,
+                    pdf_url=pdf_url,
+                    pdf_status=pdf_status,
+                    source="IEEE (via CrossRef)",
+                    abstract=item.get("abstract", ""),
+                    abstract_hit=query.lower() in title.lower(),
+                    paper_type=item.get("type",""),
+                    last_updated=year
+                ))
+
+        except Exception as e:
+            print(f"CrossRef IEEE fetch error: {e}")
 
         return papers
 
@@ -216,6 +283,11 @@ class PapersFetcher:
         papers = []
         try:
             response = requests.get(url, params=params)
+
+            if response.status_code == 403:
+                print("⚠️ IEEE API key not active. Falling back to CrossRef (member:263).")
+                return self.fetch_ieee_by_member(query, max_results)
+
             response.raise_for_status()
             data = response.json()
             for article in data.get("articles", []):
@@ -230,9 +302,12 @@ class PapersFetcher:
                     venue=article.get("publication_title"),
                     year=article.get("publication_year"),
                     doi=article.get("doi"),
+                    pdf_url=article.get("pdf_url"),
+                    pdf_status=pdf_status,
                     source="IEEE Xplore",
                     abstract=article.get("abstract"),
-                    abstract_hit=query.lower() in (article.get("abstract") or "").lower()
+                    abstract_hit=query.lower() in (article.get("abstract") or "").lower(),
+                    last_updated=article.get("publication_year")
                 ))
         except Exception as e:
             print(f"IEEE fetch error: {e}")
@@ -284,6 +359,7 @@ class PapersFetcher:
                 source="Google Scholar",
                 abstract=item.get("abstract", ""),
                 abstract_hit=query.lower() in (item.get("title", [""])[0].lower()),
+                paper_type=item.get("type",""),
                 last_updated=last_updated
             )
         except Exception as e:
@@ -307,7 +383,6 @@ class PapersFetcher:
             items = response.json()["message"]["items"]
 
             for item in items:
-
                 title = item.get("title", [""])[0]
                 authors = ", ".join([f"{a.get('given', '')} {a.get('family', '')}".strip() 
                                     for a in item.get("author", [])])
@@ -333,13 +408,14 @@ class PapersFetcher:
                     title=title,
                     authors=authors,
                     venue=item.get("container-title", ["ACM Digital Library"])[0],
-                    year=year,
+                    year=year[0],
                     doi=doi,
                     pdf_url=pdf_url,
                     pdf_status=pdf_status,
                     source="ACM Digital Library",
-                    abstract=item.get("abstract"),
+                    abstract=item.get("abstract",""),
                     abstract_hit=query.lower() in title.lower(),
+                    paper_type=item.get("type",""),
                     last_updated=last_updated
                 ))
 

@@ -83,16 +83,9 @@ class PDFHandler:
                 paper["pdf_path"] = filepath
                 logger.info(f"Downloaded PDF: {paper.get('title')} -> {filepath}")
 
-            elif resp.status_code in [403, 418]:
+            else:
                 paper["pdf_status"] = "manual"
                 msg = f"Blocked ({resp.status_code}) for {paper.get('title')} -> {pdf_url}"
-                print(msg)
-                logger.warning(msg)
-
-            else:
-                paper["pdf_status"] = "unavailable"
-                msg = f"Cannot download ({resp.status_code}, {content_type}) -> {pdf_url}"
-                print(msg)
                 logger.error(msg)
 
         except Exception as e:
@@ -109,7 +102,6 @@ class PDFHandler:
         """
         for i, paper in enumerate(papers):
             msg = f"Downloading PDF for paper {i+1}/{len(papers)}: {paper.get('title')}"
-            print(msg)
             logger.info(msg)
             papers[i] = self.download_pdf(paper)
         return papers
