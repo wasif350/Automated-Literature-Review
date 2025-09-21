@@ -11,7 +11,8 @@ st.write("Fetch papers from the selected source and save to a master CSV.")
 # Inputs
 # ----------------------------
 query = st.text_input("Enter primary keywords:", "healthcare AND device AND security")
-max_results = st.number_input("Max results per source:", min_value=1, max_value=50, value=5)
+fetch_all = st.checkbox("Fetch all related papers from selected sources")
+max_results = st.number_input("Max results per source:", min_value=1, max_value=50, value=5, disabled=fetch_all)
 
 # Dropdown to select one or more sources
 sources_selected = st.multiselect(
@@ -38,23 +39,21 @@ if st.button("Fetch Papers"):
         with st.spinner(f"Fetching papers from {', '.join(sources_selected)} via API..."):
             try:
                 selected_sources_api = ",".join([api_source_map[s] for s in sources_selected])
+                send_max_results = 0 if fetch_all else max_results
 
                 # Call FastAPI endpoint
                 response = requests.get(
                     "http://127.0.0.1:8000/papers",
                     params={
                         "query": query,
-                        "max_results": max_results,
+                        "fetch_all": fetch_all,
+                        "max_results": send_max_results,
                         "sources": selected_sources_api
                     }
                 )
 
                 if response.status_code == 200:
                     papers_list = response.json().get("results", [])
-                
-                    # Restrict results shown to frontend
-                    # if max_results and len(papers_list) > max_results:
-                    #     papers_list = papers_list[:max_results]
                   
                     if papers_list:
                         df = pd.DataFrame(papers_list)

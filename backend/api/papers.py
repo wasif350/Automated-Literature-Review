@@ -70,7 +70,7 @@ class PapersFetcher:
     # -----------------------------
     # arXiv
     # -----------------------------
-    def fetch_arxiv(self, query, max_results=5):
+    def fetch_arxiv(self, query, max_results=0, fetch_all=False):
         """
         Fetch papers from arXiv using its API.
         Parses XML feed, extracts metadata (title, authors, summary, dates, DOI, PDF link),
@@ -78,7 +78,7 @@ class PapersFetcher:
         """
 
         base_url = "http://export.arxiv.org/api/query"
-        params = {"search_query": query, "start": 0, "max_results": max_results}
+        params = {"search_query": query, "start": 0, "max_results": max_results if max_results > 0 else 1000}
         response = requests.get(base_url, params=params)
         if response.status_code != 200:
             return []
@@ -145,7 +145,7 @@ class PapersFetcher:
     # -----------------------------
     # Semantic Scholar
     # -----------------------------
-    def fetch_semantic_scholar(self, query, max_results=100, year="2023-"):
+    def fetch_semantic_scholar(self, query, max_results=0, fetch_all=False):
         """
         Fetch papers from Semantic Scholar API.
         Retrieves metadata (title, authors, venue, year, abstract, PDF info) 
@@ -158,7 +158,7 @@ class PapersFetcher:
 
         papers, token = [], None
         while True:
-            params = {"query": f'"{query}"', "fields": fields, "year": year}
+            params = {"query": f'"{query}"', "fields": fields}
             if token:
                 params["token"] = token
 
@@ -170,9 +170,11 @@ class PapersFetcher:
             data = response.json()
             batch = data.get("data", [])
             for paper in batch: 
+                print(paper)
                 open_access = paper.get("openAccessPdf", {})
 
                 pdf_url = open_access.get("url") if open_access and open_access.get("url") else None
+                doi = None
                 if pdf_url and pdf_url.startswith("https://doi.org/"):
                     doi = pdf_url.replace("https://doi.org/", "")
                 pdf_status = "downloaded" if pdf_url else "unavailable"
@@ -198,13 +200,18 @@ class PapersFetcher:
             token = data.get("token")
             if not token:
                 break
+        if not fetch_all and max_results > 0:
+            papers = papers[:max_results]
          
         return papers
         
-    def fetch_ieee_by_member(self, query, max_results=5):
+    def fetch_ieee_by_member(self, query, max_results=0, fetch_all=False):
         """
         Fallback: Fetch IEEE papers via CrossRef member:263
         """
+        
+        if fetch_all:
+            max_results = 50
         url = "https://api.crossref.org/works"
         params = {"query": query, "rows": max_results, "filter": "member:263"}
 
@@ -213,7 +220,6 @@ class PapersFetcher:
             response = requests.get(url, params=params)
             response.raise_for_status()
             items = response.json()["message"]["items"]
-
             for item in items:
                 doi = item.get("DOI")
                 title = item.get("title", [""])[0]
@@ -265,7 +271,7 @@ class PapersFetcher:
     # -----------------------------
     # IEEE
     # -----------------------------
-    def fetch_ieee(self, query, max_results=5):
+    def fetch_ieee(self, query, max_results=5, fetch_all=False):
         """
         Fetch papers from IEEE Xplore API.
         Extracts metadata (title, authors, venue, year, DOI, abstract, PDF info) 
@@ -286,7 +292,7 @@ class PapersFetcher:
 
             if response.status_code == 403:
                 print("⚠️ IEEE API key not active. Falling back to CrossRef (member:263).")
-                return self.fetch_ieee_by_member(query, max_results)
+                return self.fetch_ieee_by_member(query, max_results, fetch_all)
 
             response.raise_for_status()
             data = response.json()
@@ -366,12 +372,15 @@ class PapersFetcher:
             print(f"CrossRef enrichment failed for DOI {doi}: {e}")
             return None
 
-    def fetch_acm_by_member(self, query, max_results=20):
+    def fetch_acm_by_member(self, query, max_results=20, fetch_all=False):
         """
         Fetch papers from ACM Digital Library via CrossRef member ID.
         Extracts metadata (title, authors, venue, year, DOI, PDF link) 
         and normalizes results into a standard format.
         """
+
+        if fetch_all:
+            max_results = 50
 
         url = "https://api.crossref.org/works"
         params = {"query": query, "rows": max_results, "filter": "member:320"}
@@ -427,70 +436,82 @@ class PapersFetcher:
     # -----------------------------
     # Google Scholar
     # -----------------------------
-    def fetch_google_scholar(self, query: str, scholar_pages: int = 1, max_results: int = 10, timeout: int = 120):
+    def fetch_google_scholar(self, query: str, max_results: int = 10, fetch_all=False):
         """
         Fetch papers from Google Scholar using PyPaperBot subprocess.
         Downloads PDFs, reads results.csv, enriches metadata via DOI, 
         and normalizes papers with PDF paths.
         """
-        papers = []
 
+        papers = []
         try:
             dwn_dir = os.path.abspath("./downloads")
             os.makedirs(dwn_dir, exist_ok=True)
-            cmd = [
-                sys.executable, "-m", "PyPaperBot",
-                f"--query={query.strip()}",
-                f"--scholar-pages={scholar_pages}",
-                f"--scholar-results={max_results}",
-                "--restrict=0",
-                f"--dwn-dir={dwn_dir}"
-            ]
 
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            if result.returncode != 0:
-                return []
+            effective_max = max_results if not fetch_all else 100 
+            pages = 1 if not fetch_all else (effective_max // 10) + 1
 
-            csv_file = os.path.join(dwn_dir, "result.csv")
-            start_time = time.time()
-            while time.time() - start_time < timeout:
-                if os.path.exists(csv_file) and os.path.getsize(csv_file) > 0:
+            for page in range(1, pages + 1):
+                cmd = [
+                    sys.executable, "-m", "PyPaperBot",
+                    f"--query={query.strip()}",
+                    f"--scholar-pages={page}",
+                    f"--scholar-results={10 if fetch_all else effective_max}",
+                    "--restrict=0",
+                    f"--dwn-dir={dwn_dir}"
+                ]
+
+                result = subprocess.run(cmd, capture_output=True, text=True)
+                if result.returncode != 0:
+                    print(f"PyPaperBot failed on page {page}: {result.stderr}")
+                    continue
+
+                csv_file = os.path.join(dwn_dir, "result.csv")
+                start_time = time.time()
+                while time.time() - start_time < 20:
+                    if os.path.exists(csv_file) and os.path.getsize(csv_file) > 0:
+                        break
+                    time.sleep(1)
+                else:
+                    print(f"results.csv not found or empty on page {page}.")
+                    continue
+
+                with open(csv_file, newline="", encoding="utf-8") as csvfile:
+                    reader = csv.DictReader(csvfile)
+                    for row in reader:
+                        doi = row.get("doi") or row.get("DOI")
+                        paper = None
+
+                        if doi:
+                            enriched = self.enrich_acm_with_doi(doi, query)
+                            if enriched:
+                                paper = enriched
+
+                        if not paper:
+                            paper = self.normalize_paper(
+                                paper_id=doi or row.get("ID"),
+                                title=row.get("title"),
+                                authors=[a.strip() for a in row.get("author", "").split(";")],
+                                venue=row.get("journal") or "Google Scholar",
+                                year=row.get("year"),
+                                doi=doi,
+                                pdf_url=row.get("pdf_url") or "",
+                                pdf_status="",
+                                source="Google Scholar (CSV)",
+                                abstract=row.get("abstract") or "",
+                                abstract_hit=query.lower() in (row.get("abstract") or "").lower(),
+                                last_updated=row.get("year")
+                            )
+                        papers.append(paper)
+
+                if not fetch_all:
                     break
-                time.sleep(1)
-            else:
-                print("results.csv not found or empty.")
-                return []
-
-            with open(csv_file, newline="", encoding="utf-8") as csvfile:
-                reader = csv.DictReader(csvfile)
-                for row in reader:
-                    doi = row.get("doi") or row.get("DOI")
-                    # pdf_path = row.get("pdf_path") or row.get("PDF Path") or ""
-                    paper = None
-
-                    if doi:
-                        enriched = self.enrich_acm_with_doi(doi, query)
-                        if enriched:
-                            paper = enriched
-                    if not paper:
-                        paper = self.normalize_paper(
-                            paper_id=doi or row.get("ID"),
-                            title=row.get("title"),
-                            authors=[a.strip() for a in row.get("author", "").split(";")],
-                            venue=row.get("journal") or "Google Scholar",
-                            year=row.get("year"),
-                            doi=doi,
-                            pdf_url=row.get("pdf_url") or "",
-                            pdf_status="",
-                            source="Google Scholar (CSV)",
-                            abstract=row.get("abstract") or "",
-                            abstract_hit=query.lower() in (row.get("abstract") or "").lower(),
-                            last_updated=row.get("year")
-                        )
-                    papers.append(paper)
 
         except Exception as e:
             print(f"Google Scholar fetch error: {e}")
+
+        if not fetch_all and len(papers) > max_results:
+            papers = papers[:max_results]
 
         return papers
 
@@ -516,4 +537,3 @@ class PaperProcessor:
                 duplicates.append(paper)
 
         return unique_papers
-
