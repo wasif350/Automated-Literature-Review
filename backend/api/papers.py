@@ -1,20 +1,41 @@
-import requests
 import xml.etree.ElementTree as ET
 import subprocess, bibtexparser
+from bs4 import BeautifulSoup
+from datetime import datetime
 import json
-import sys, os, time
-
+import sys
+import csv
+import os
+import time
+import re
+import requests
 
 class PapersFetcher:
     def __init__(self, semantic_api_key=None, ieee_api_key=None):
         self.semantic_api_key = semantic_api_key
         self.ieee_api_key = ieee_api_key
 
+
+    # -----------------------------
+    # Normalized paper abstract
+    # -----------------------------
+    def clean_abstract(self,raw_abstract: str) -> str:
+        """
+        Clean abstracts that may contain JATS XML tags.
+        Returns plain text without <jats:...> markup.
+        """
+        if not raw_abstract or not isinstance(raw_abstract, str):
+            return ""
+
+        text = BeautifulSoup(raw_abstract, "lxml").get_text(" ", strip=True)
+        text = re.sub(r"<.*?>", "", text)
+        return text.strip()
+
+
     # -----------------------------
     # Normalized paper template
     # -----------------------------
-    @staticmethod
-    def normalize_paper(paper_id, title, authors, venue, year, doi, pdf_url, pdf_status, source, abstract="", abstract_hit=False , last_updated=""):
+    def normalize_paper(self,paper_id, title, authors, venue, year, doi, pdf_url, pdf_status, source, abstract="", abstract_hit=False , last_updated=""):
         """
         Normalize paper metadata into a consistent dictionary format.
         Ensures uniform fields (ID, title, authors, venue, year, DOI, abstract, PDF info, etc.)
@@ -25,7 +46,7 @@ class PapersFetcher:
             authors_str = ", ".join(authors)
         else:
             authors_str = authors or ""
-
+        abstract_clean = self.clean_abstract(abstract)
         return {
             "paper_id": paper_id,
             "title": title,
@@ -34,7 +55,7 @@ class PapersFetcher:
             "year": year,
             "doi": doi,
             "source": source,
-            "abstract": abstract,
+            "abstract": abstract_clean,
             "abstract_hit": abstract_hit,
             "primary_keywords": [],
             "pdf_status": pdf_status,
@@ -74,8 +95,12 @@ class PapersFetcher:
             title = entry.find("atom:title", ns).text.strip() if entry.find("atom:title", ns) is not None else None
             summary = entry.find("atom:summary", ns).text.strip() if entry.find("atom:summary", ns) is not None else None
             published = entry.find("atom:published", ns).text if entry.find("atom:published", ns) is not None else None
-            updated = entry.find("atom:updated", ns).text if entry.find("atom:updated", ns) is not None else None
-
+            last_updated = entry.find("atom:updated", ns)
+            if last_updated is not None:
+                raw_time = last_updated.text
+                updated = datetime.strptime(raw_time, "%Y-%m-%dT%H:%M:%SZ").strftime("%Y-%m-%d")
+            else:
+                updated = None
             authors = ", ".join(
                 [a.find("atom:name", ns).text for a in entry.findall("atom:author", ns)]
             )
@@ -143,15 +168,19 @@ class PapersFetcher:
             batch = data.get("data", [])
             for paper in batch:
                 open_access = paper.get("openAccessPdf", {})
+
                 pdf_url = open_access.get("url") if open_access and open_access.get("url") else None
+                if pdf_url and pdf_url.startswith("https://doi.org/"):
+                    doi = pdf_url.replace("https://doi.org/", "")
                 pdf_status = "downloaded" if pdf_url else "unavailable"
+
                 papers.append(self.normalize_paper(
                     paper_id=paper.get("paperId"),
                     title=paper.get("title"),
                     authors=[a["name"] for a in paper.get("authors", [])],
                     venue=paper.get("venue"),
                     year=paper.get("year"),
-                    doi=None,
+                    doi=doi,
                     pdf_url = pdf_url,
                     pdf_status = pdf_status,
                     source="Semantic Scholar",
@@ -178,7 +207,7 @@ class PapersFetcher:
 
         url = "https://ieeexploreapi.ieee.org/api/v1/search/articles"
         params = {
-            "apikey": self.ieee_api_key,
+            "apikey": 'nw5ez8vktv2dtxrxud6xy6av',
             "querytext": query,
             "max_records": max_results,
             "format": "json"
@@ -190,8 +219,10 @@ class PapersFetcher:
             response.raise_for_status()
             data = response.json()
             for article in data.get("articles", []):
+
                 authors = [a.get("full_name") for a in article.get("authors", [])] if article.get("authors") else []
                 pdf_status = "downloaded" if article.get("pdf_url") else "unavailable"
+
                 papers.append(self.normalize_paper(
                     paper_id=article.get("article_number") or article.get("doi"),
                     title=article.get("title"),
@@ -240,6 +271,7 @@ class PapersFetcher:
             if "issued" in item and "date-parts" in item["issued"]:
                 year = item["issued"]["date-parts"][0]
                 last_updated = "-".join(str(x) for x in year)
+
             return self.normalize_paper(
                 paper_id=item.get("DOI"),
                 title=item.get("title", [None])[0],
@@ -250,7 +282,7 @@ class PapersFetcher:
                 pdf_url = pdf_url,
                 pdf_status = '',
                 source="Google Scholar",
-                abstract=item.get("abstract") or "",
+                abstract=item.get("abstract", ""),
                 abstract_hit=query.lower() in (item.get("title", [""])[0].lower()),
                 last_updated=last_updated
             )
@@ -306,7 +338,7 @@ class PapersFetcher:
                     pdf_url=pdf_url,
                     pdf_status=pdf_status,
                     source="ACM Digital Library",
-                    abstract=None,
+                    abstract=item.get("abstract"),
                     abstract_hit=query.lower() in title.lower(),
                     last_updated=last_updated
                 ))
@@ -325,13 +357,11 @@ class PapersFetcher:
         Downloads PDFs, reads results.csv, enriches metadata via DOI, 
         and normalizes papers with PDF paths.
         """
-        import csv
         papers = []
 
         try:
             dwn_dir = os.path.abspath("./downloads")
             os.makedirs(dwn_dir, exist_ok=True)
-
             cmd = [
                 sys.executable, "-m", "PyPaperBot",
                 f"--query={query.strip()}",
@@ -366,7 +396,6 @@ class PapersFetcher:
                         enriched = self.enrich_acm_with_doi(doi, query)
                         if enriched:
                             paper = enriched
-
                     if not paper:
                         paper = self.normalize_paper(
                             paper_id=doi or row.get("ID"),
@@ -382,7 +411,6 @@ class PapersFetcher:
                             abstract_hit=query.lower() in (row.get("abstract") or "").lower(),
                             last_updated=row.get("year")
                         )
-
                     papers.append(paper)
 
         except Exception as e:
