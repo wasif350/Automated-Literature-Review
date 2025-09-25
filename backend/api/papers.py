@@ -290,7 +290,7 @@ class PapersFetcher:
             response = requests.get(url, params=params)
 
             if response.status_code == 403:
-                print("⚠️ IEEE API key not active. Falling back to CrossRef (member:263).")
+                print("IEEE API key not active. Falling back to CrossRef (member:263).")
                 return self.fetch_ieee_by_member(query, max_results, fetch_all)
 
             response.raise_for_status()

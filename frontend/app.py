@@ -152,9 +152,7 @@ if st.button("Fetch Papers"):
                 time.sleep(2)
             # Save final CSV after all sources
             if papers:
-                print('before duplicates',len(papers))
                 papers = deduplicate(papers)
-                print('after duplicates',len(papers))
                 df_file = [sanitize_paper(p) for p in papers]
                 df_file.sort(key=lambda p: (-safe_year(p), p.get("title", "")))
 
