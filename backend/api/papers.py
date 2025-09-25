@@ -170,7 +170,6 @@ class PapersFetcher:
             data = response.json()
             batch = data.get("data", [])
             for paper in batch: 
-                print(paper)
                 open_access = paper.get("openAccessPdf", {})
 
                 pdf_url = open_access.get("url") if open_access and open_access.get("url") else None
@@ -211,7 +210,7 @@ class PapersFetcher:
         """
         
         if fetch_all:
-            max_results = 50
+            max_results = 1000
         url = "https://api.crossref.org/works"
         params = {"query": query, "rows": max_results, "filter": "member:263"}
 
@@ -291,7 +290,7 @@ class PapersFetcher:
             response = requests.get(url, params=params)
 
             if response.status_code == 403:
-                print("⚠️ IEEE API key not active. Falling back to CrossRef (member:263).")
+                print("IEEE API key not active. Falling back to CrossRef (member:263).")
                 return self.fetch_ieee_by_member(query, max_results, fetch_all)
 
             response.raise_for_status()
@@ -380,7 +379,7 @@ class PapersFetcher:
         """
 
         if fetch_all:
-            max_results = 50
+            max_results = 1000
 
         url = "https://api.crossref.org/works"
         params = {"query": query, "rows": max_results, "filter": "member:320"}
@@ -439,101 +438,87 @@ class PapersFetcher:
     def fetch_google_scholar(self, query: str, max_results: int = 10, fetch_all=False):
         """
         Fetch papers from Google Scholar using PyPaperBot subprocess.
-        Downloads PDFs, reads results.csv, enriches metadata via DOI, 
-        and normalizes papers with PDF paths.
+        Correctly handles paging (>10 results).
         """
 
         papers = []
+        seen_ids = set()
+
         try:
             dwn_dir = os.path.abspath("./downloads")
             os.makedirs(dwn_dir, exist_ok=True)
 
-            effective_max = max_results if not fetch_all else 100 
-            pages = 1 if not fetch_all else (effective_max // 10) + 1
+            if fetch_all:
+                effective_max = 1000
+            else:
+                effective_max = max_results
 
-            for page in range(1, pages + 1):
-                cmd = [
-                    sys.executable, "-m", "PyPaperBot",
-                    f"--query={query.strip()}",
-                    f"--scholar-pages={page}",
-                    f"--scholar-results={10 if fetch_all else effective_max}",
-                    "--restrict=0",
-                    f"--dwn-dir={dwn_dir}"
-                ]
+            # number of pages needed
+            pages = (effective_max // 10) + (1 if effective_max % 10 else 0)
 
-                result = subprocess.run(cmd, capture_output=True, text=True)
-                if result.returncode != 0:
-                    print(f"PyPaperBot failed on page {page}: {result.stderr}")
-                    continue
+            cmd = [
+                sys.executable, "-m", "PyPaperBot",
+                f"--query={query.strip()}",
+                f"--scholar-pages={pages}",
+                "--scholar-results=10", 
+                "--restrict=0",
+                f"--dwn-dir={dwn_dir}"
+            ]
 
-                csv_file = os.path.join(dwn_dir, "result.csv")
-                start_time = time.time()
-                while time.time() - start_time < 20:
-                    if os.path.exists(csv_file) and os.path.getsize(csv_file) > 0:
-                        break
-                    time.sleep(1)
-                else:
-                    print(f"results.csv not found or empty on page {page}.")
-                    continue
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                print(f"PyPaperBot failed: {result.stderr}")
+                return []
 
-                with open(csv_file, newline="", encoding="utf-8") as csvfile:
-                    reader = csv.DictReader(csvfile)
-                    for row in reader:
-                        doi = row.get("doi") or row.get("DOI")
-                        paper = None
-
-                        if doi:
-                            enriched = self.enrich_acm_with_doi(doi, query)
-                            if enriched:
-                                paper = enriched
-
-                        if not paper:
-                            paper = self.normalize_paper(
-                                paper_id=doi or row.get("ID"),
-                                title=row.get("title"),
-                                authors=[a.strip() for a in row.get("author", "").split(";")],
-                                venue=row.get("journal") or "Google Scholar",
-                                year=row.get("year"),
-                                doi=doi,
-                                pdf_url=row.get("pdf_url") or "",
-                                pdf_status="",
-                                source="Google Scholar (CSV)",
-                                abstract=row.get("abstract") or "",
-                                abstract_hit=query.lower() in (row.get("abstract") or "").lower(),
-                                last_updated=row.get("year")
-                            )
-                        papers.append(paper)
-
-                if not fetch_all:
+            csv_file = os.path.join(dwn_dir, "result.csv")
+            start_time = time.time()
+            while time.time() - start_time < 20:
+                if os.path.exists(csv_file) and os.path.getsize(csv_file) > 0:
                     break
+                time.sleep(1)
+            else:
+                print("results.csv not found or empty.")
+                return []
+
+            with open(csv_file, newline="", encoding="utf-8") as csvfile:
+                reader = csv.DictReader(csvfile)
+                for row in reader:
+                    doi = row.get("doi") or row.get("DOI")
+                    uid = doi or row.get("ID") or row.get("title")
+
+                    if uid in seen_ids:
+                        continue
+                    seen_ids.add(uid)
+
+                    paper = None
+                    if doi:
+                        enriched = self.enrich_acm_with_doi(doi, query)
+                        if enriched:
+                            paper = enriched
+
+                    if not paper:
+                        paper = self.normalize_paper(
+                            paper_id=doi or row.get("ID"),
+                            title=row.get("title"),
+                            authors=[a.strip() for a in row.get("author", "").split(";")],
+                            venue=row.get("journal") or "Google Scholar",
+                            year=row.get("year"),
+                            doi=doi,
+                            pdf_url=row.get("pdf_url") or "",
+                            pdf_status="",
+                            source="Google Scholar (CSV)",
+                            abstract=row.get("abstract") or "",
+                            abstract_hit=query.lower() in (row.get("abstract") or "").lower(),
+                            last_updated=row.get("year")
+                        )
+                    papers.append(paper)
+
+            # ✅ Limit to requested max_results
+            if not fetch_all and len(papers) > max_results:
+                papers = papers[:max_results]
 
         except Exception as e:
             print(f"Google Scholar fetch error: {e}")
 
-        if not fetch_all and len(papers) > max_results:
-            papers = papers[:max_results]
-
+        print("✅ Total papers fetched from Google Scholar:", len(papers))
         return papers
-
-class PaperProcessor:
-
-    def deduplicate(self, all_papers):
-        """
-        Deduplicate papers across multiple sources using DOI or (title + first author).
-        """
-        seen_keys = set()
-        unique_papers = []
-        duplicates = []
-
-        for paper in all_papers:
-            key = paper.get("doi") or (
-                paper.get("title", "").lower(),
-                paper.get("authors")[0] if paper.get("authors") else "",
-            )
-            if key not in seen_keys:
-                seen_keys.add(key)
-                unique_papers.append(paper)
-            else:
-                duplicates.append(paper)
-
-        return unique_papers

@@ -11,7 +11,7 @@ data/
 backend/downloads/
 
 # Ignore backend .env file
-backend/.env/
+backend/.env
 
 # Ignore virtual environments in backend and frontend
 backend/venv/
