@@ -33,7 +33,7 @@ backend/api/papers.py
 
     - Semantic Scholar (API)
 
-    - IEEE Xplore (API)
+    - IEEE Xplore (API/via CrossRef)
 
     - ACM Digital Library (via CrossRef)
 
@@ -89,6 +89,8 @@ Configuration
 
         pdf_status (downloaded | manual | unavailable)
 
+        pdf_url
+
         secondary_keywords_present
 
         secondary_keyword_counts
@@ -98,13 +100,28 @@ Configuration
         last_updated
 
 How to run
-    Backend
+1. Setup environment
+    - Backend
         - cd backend
-        - uvicorn main:app --reload
+        - python -m venv venv
+        - venv\Scripts\activate
 
-    Frontend
+    - Frontend
         - cd frontend
-        - streamlit run app.py
+        - python -m venv venv
+        - venv\Scripts\activate
+
+2. Install requirements (backend only)
+    - cd backend
+    - pip install -r requirements.txt
+
+3. Run backend
+    - cd backend
+    - uvicorn main:app --reload
+
+4. Run frontend
+    - cd frontend
+    - streamlit run app.py
 
 
-Then open the Streamlit UI in your browser, enter keywords, and fetch papers 🚀
+Then open the Streamlit UI in your browser, enter keywords, and fetch papers
