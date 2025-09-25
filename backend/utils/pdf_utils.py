@@ -168,7 +168,7 @@ class PdfProcessor:
     def __init__(self, download_dir="./downloads"):
         self.pdf_handler = PDFHandler(download_dir=download_dir)
 
-    def process(self, papers, query):
+    def process(self, papers):
         """
         Downloads PDFs and scans them for secondary keywords derived from the query.
         Updates each paper dict with:
@@ -179,19 +179,6 @@ class PdfProcessor:
         - snippet columns per keyword
         - primary_keywords (from query)
         """
-        raw_keywords = query.replace("AND", " ").replace("and", " ").split()
-        secondary_keywords = [kw.strip() for kw in raw_keywords if kw.strip()]
-        pdf_scanner = PDFScanner(secondary_keywords=secondary_keywords)
-
-        logger.info(f"Processing {len(papers)} papers | Secondary keywords={secondary_keywords}")
-
         papers = self.pdf_handler.batch_download(papers)
-
-        for i, paper in enumerate(papers):
-            if paper.get("pdf_status") == "downloaded" and paper.get("pdf_path"):
-                scan_results = pdf_scanner.scan_pdf(paper["pdf_path"])
-                papers[i].update(scan_results)
-
-            paper["primary_keywords"] = secondary_keywords
 
         return papers
