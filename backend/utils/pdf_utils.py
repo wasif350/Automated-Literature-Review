@@ -90,7 +90,6 @@ class PDFHandler:
 
         except Exception as e:
             msg = f"Failed to download PDF for {paper.get('title')}: {e}"
-            print(msg)
             logger.exception(msg)
             paper["pdf_status"] = "unavailable"
 
@@ -158,7 +157,6 @@ class PDFScanner:
 
         except Exception as e:
             msg = f"Failed to scan {pdf_path}: {e}"
-            print(msg)
             logger.exception(msg)
 
         return results                      
