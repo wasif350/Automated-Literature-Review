@@ -39,6 +39,8 @@ ALLOWED_FIELDS = {
     "paper_type", "last_updated"
 }
 
+BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8000")
+
 def sanitize_paper(paper: dict) -> dict:
     """Keep only allowed fields in each paper row."""
     return {k: v for k, v in paper.items() if k in ALLOWED_FIELDS}
@@ -87,7 +89,7 @@ if st.button("Fetch Papers"):
                 send_max_results = 0 if fetch_all else max_results
 
                 response = requests.get(
-                    "http://127.0.0.1:8000/papers",
+                    f"{BACKEND_URL}/papers",
                     params={
                         "query": query,
                         "fetch_all": fetch_all,
@@ -109,7 +111,7 @@ if st.button("Fetch Papers"):
                 for i, paper in enumerate(new_papers, start=1):
                     status_placeholder.info(f"Downloading PDF {i}/{len(new_papers)} from {source}...")
                     download_resp = requests.post(
-                        "http://127.0.0.1:8000/download_papers",
+                        f"{BACKEND_URL}/download_papers",
                         json={"papers": [paper]} 
                     )
                     if download_resp.status_code == 200:
@@ -126,7 +128,7 @@ if st.button("Fetch Papers"):
                 for i, paper in enumerate(papers, start=1):
                     status_placeholder.info(f"Scanning PDF {scan_paper}/{len(new_papers)} from {source}...")
                     scan_resp = requests.post(
-                        "http://127.0.0.1:8000/scan_papers",
+                        f"{BACKEND_URL}/scan_papers",
                         json={"papers": [paper], "query": query}
                     )
                     if scan_resp.status_code == 200:
