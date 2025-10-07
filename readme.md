@@ -98,30 +98,25 @@ Configuration
         paper_type
 
         last_updated
+How to Run
 
-How to run
-1. Setup environment
-    - Backend
-        - cd backend
-        - python -m venv venv
-        - venv\Scripts\activate
+    The entire application (both frontend and backend) can now be started with a single Docker command.
+    
+        Build and start the application
+        - docker-compose up --build
 
-    - Frontend
-        - cd frontend
-        - python -m venv venv
-        - venv\Scripts\activate
+        This command will:
+        - Build the Docker images for both the backend (FastAPI) and frontend (Streamlit)
+        - Start both containers and link them together automatically
 
-2. Install requirements (backend only)
-    - cd backend
-    - pip install -r requirements.txt
+Access the app
 
-3. Run backend
-    - cd backend
-    - uvicorn main:app --reload
+    Once the containers are running:
+    - Frontend (Streamlit UI): http://localhost:8501
+    - Backend (FastAPI API): http://localhost:8000
+    Then open the Streamlit UI in your browser, enter keywords, and fetch papers
 
-4. Run frontend
-    - cd frontend
-    - streamlit run app.py
+Stop the application
 
-
-Then open the Streamlit UI in your browser, enter keywords, and fetch papers
+    When finished, stop and remove all containers:
+    -docker-compose down
