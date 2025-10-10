@@ -1,7 +1,7 @@
 Literature Review Pipeline
 
-This project is a pipeline + app that helps fetch, process, and review research papers from multiple scholarly sources.
-It searches papers by keywords, tries to download PDFs, scans them for other keywords, and saves everything into a CSV report.
+This project is a pipeline that helps fetch, process, and scan research papers from multiple scholarly sources.
+It searches papers by keywords, tries to download PDFs, scans them for other secondary keywords, and saves everything into a CSV report.
 
 🚀 How it works
 
@@ -9,7 +9,7 @@ Frontend (Streamlit app)
 
 frontend/app.py
 
-    - Simple UI to enter keywords, choose sources, and run searches.
+    - Simple UI to enter keywords, secondary keywords, choose sources, and run searches.
 
     - Calls the backend API and shows results in a table.
 
@@ -100,7 +100,7 @@ Configuration
         last_updated
 How to Run
 
-    The entire application (both frontend and backend) can now be started with a single Docker command.
+    The entire application can started with a  Docker command.
     
         Build and start the application
         - docker-compose up --build
@@ -119,4 +119,4 @@ Access the app
 Stop the application
 
     When finished, stop and remove all containers:
-    -docker-compose down
+    - docker-compose down

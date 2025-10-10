@@ -11,7 +11,14 @@ st.write("Fetch papers from the selected source and save to a master CSV.")
 # ----------------------------
 # Inputs
 # ----------------------------
-query = st.text_input("Enter primary keywords:", "healthcare AND device AND security")
+query = st.text_input(
+    "Enter primary keywords:", 
+    placeholder="healthcare AND device AND security"
+)
+secondary_keywords = st.text_input(
+    "Enter secondary keywords (for PDF scanning):", 
+    placeholder="ethics, security, privacy"
+)
 fetch_all = st.checkbox("Fetch all related papers from selected sources")
 max_results = st.number_input(
     "Max results per source:", min_value=1, max_value=50, value=5, disabled=fetch_all
@@ -62,7 +69,7 @@ def deduplicate(all_papers):
 
     for paper in all_papers:
         key = paper.get("doi") or (
-            paper.get("title", "").lower(),
+            paper.get("title", "").lower() if paper.get("title") else "",
             paper.get("authors")[0] if paper.get("authors") else "",
         )
         if key not in seen_keys:
@@ -129,7 +136,11 @@ if st.button("Fetch Papers"):
                     status_placeholder.info(f"Scanning PDF {scan_paper}/{len(new_papers)} from {source}...")
                     scan_resp = requests.post(
                         f"{BACKEND_URL}/scan_papers",
-                        json={"papers": [paper], "query": query}
+                        json={
+                                "papers": [paper], 
+                                "query": query, 
+                                "secondary_keywords": secondary_keywords
+                              }
                     )
                     if scan_resp.status_code == 200:
                         scanned = scan_resp.json().get("results", [])

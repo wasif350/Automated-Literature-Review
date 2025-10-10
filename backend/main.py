@@ -24,6 +24,7 @@ class PapersRequest(BaseModel):
 class ScanRequest(BaseModel):
     papers: List[Dict]
     query: str
+    secondary_keywords: str
 
 
 fetcher = PapersFetcher(
@@ -98,9 +99,24 @@ def download_papers(request: PapersRequest):
 def scan_papers(request: ScanRequest):
     papers = request.papers
     query = request.query
-    logger.info(f"Scanning PDFs for {len(papers)} papers with query '{query}'")
-    raw_keywords = query.replace("AND", " ").replace("and", " ").split()
+    secondary_keywords_raw = request.secondary_keywords
+
+    if secondary_keywords_raw.strip():
+        raw_keywords = (
+            secondary_keywords_raw.replace("AND", " ")
+            .replace("and", " ")
+            .replace(",", " ")
+            .split()
+        )
+    if query.strip():
+        query_raw_keywords = query.replace("AND", " ").replace("and", " ").split()
+    
     secondary_keywords = [kw.strip() for kw in raw_keywords if kw.strip()]
+
+    logger.info(
+        f"Scanning PDFs for {len(papers)} papers "
+        f"with query='{query}' and secondary keywords={secondary_keywords}"
+    )
     pdf_scanner = PDFScanner(secondary_keywords=secondary_keywords)
 
     try:
@@ -108,9 +124,10 @@ def scan_papers(request: ScanRequest):
             if paper.get("pdf_status") == "downloaded" and paper.get("pdf_path"):
                 scan_results = pdf_scanner.scan_pdf(paper["pdf_path"])
                 papers[i].update(scan_results)
-            paper["primary_keywords"] = secondary_keywords
+            paper["primary_keywords"] = query_raw_keywords
         logger.info("PDFs scanned successfully")
         return {"status": "success", "results": papers}
+
     except Exception as e:
         logger.exception(f"Error scanning PDFs: {e}")
         return {"status": "error", "message": str(e)}
